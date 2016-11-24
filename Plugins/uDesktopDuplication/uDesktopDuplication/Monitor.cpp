@@ -116,7 +116,7 @@ void Monitor::Render(UINT timeout)
     ComPtr<IDXGIResource> resource;
     DXGI_OUTDUPL_FRAME_INFO frameInfo;
 
-    const auto hr = deskDupl_->AcquireNextFrame(timeout, &frameInfo, &resource);
+    auto hr = deskDupl_->AcquireNextFrame(timeout, &frameInfo, &resource);
     if (FAILED(hr))
     {
         switch (hr)
@@ -191,9 +191,29 @@ void Monitor::Render(UINT timeout)
     UpdateMetadata(frameInfo);
     UpdateCursor(frameInfo);
 
-    if (FAILED(deskDupl_->ReleaseFrame()))
+	hr = deskDupl_->ReleaseFrame();
+    if (FAILED(hr))
     {
-        Debug::Error("Monitor::Render() => ReleaseFrame() failed.");
+		switch (hr)
+		{
+            case DXGI_ERROR_ACCESS_LOST:
+			{
+				Debug::Log("Monitor::Render() => ReleaseFrame() => DXGI_ERROR_ACCESS_LOST.");
+				state_ = State::AccessLost;
+				break;
+			}
+            case DXGI_ERROR_INVALID_CALL:
+            {
+                Debug::Error("Monitor::Render() => ReleaseFrame() => DXGI_ERROR_INVALID_CALL.");
+                break;
+            }
+            default:
+            {
+                state_ = State::Unknown;
+                Debug::Error("Monitor::Render() => Unknown Error.");
+                break;
+            }
+		}
     }
 }
 
