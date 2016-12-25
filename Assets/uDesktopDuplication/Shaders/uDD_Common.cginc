@@ -63,18 +63,23 @@ inline void uddConvertToLinearIfNeeded(inout fixed3 rgb)
     }
 }
 
-inline fixed4 uddGetScreenTexture(float2 uv)
+inline fixed4 uddGetTexture(sampler2D tex, float2 uv)
 {
     uv = uddInvertUV(uv);
 #ifdef USE_CLIP
     uv = uddClipUV(uv);
 #endif
-    fixed4 c = tex2D(_MainTex, uddRotateUV(uv));
+    fixed4 c = tex2D(tex, uddRotateUV(uv));
     uddConvertToLinearIfNeeded(c.rgb);
     return c;
 }
 
-inline void uddBendVertex(inout float4 v, half radius, half width, half thickness)
+inline fixed4 uddGetScreenTexture(float2 uv)
+{
+    return uddGetTexture(_MainTex, uv);
+}
+
+inline void uddBendVertex(inout float3 v, half radius, half width, half thickness)
 {
 #ifdef BEND_ON
     half angle = width * v.x / radius;
@@ -90,9 +95,35 @@ inline void uddBendVertex(inout float4 v, half radius, half width, half thicknes
     v.x = radius * sin(angle) / width;
 #else
     #ifdef _FORWARD_Z
-    v.y *= thickness;
-    #elif _FORWARD_Y
     v.z *= thickness;
+    #elif _FORWARD_Y
+    v.y *= thickness;
+    #endif
+#endif
+}
+
+inline float3 uddRotateY(float3 n, float angle)
+{
+    float c = cos(angle);
+    float s = sin(angle);
+    return float3(c * n.x - s * n.z, n.y, s * n.x + c * n.z);
+}
+
+inline float3 uddRotateX(float3 n, float angle)
+{
+    float c = cos(angle);
+    float s = sin(angle);
+    return float3(n.x, c * n.y + s * n.z, -s * n.y + c * n.z);
+}
+
+inline void uddBendNormal(float4 x, inout float3 n, half radius, half width)
+{
+#ifdef BEND_ON
+    half angle = width * x / radius;
+    #ifdef _FORWARD_Z
+    n = uddRotateY(n, -angle);
+    #elif _FORWARD_Y
+    n = uddRotateX(n, -angle);
     #endif
 #endif
 }

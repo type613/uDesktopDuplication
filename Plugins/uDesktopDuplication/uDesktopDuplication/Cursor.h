@@ -10,10 +10,10 @@ class Monitor;
 class Cursor
 {
 public:
-    explicit Cursor(Monitor* monitor);
+    explicit Cursor();
     ~Cursor();
-    void UpdateBuffer(const DXGI_OUTDUPL_FRAME_INFO& frameInfo);
-    void UpdateTexture();
+    void UpdateBuffer(Monitor* monitor, const DXGI_OUTDUPL_FRAME_INFO& frameInfo);
+    void Draw(Monitor* monitor);
     void GetTexture(ID3D11Texture2D* texture);
 
     bool IsVisible() const;
@@ -25,14 +25,11 @@ public:
     int GetType() const;
 
 private:
-    bool IsCursorOnParentMonitor() const;
-
-    Monitor* monitor_;
     bool isVisible_ = false;
     int x_ = -1;
     int y_ = -1;
-    Buffer<BYTE> apiBuffer_;
-	Buffer<BYTE> bgraBuffer_;
+    Buffer<BYTE> buffer_;
+    Buffer<BYTE> bgraBuffer_;
     DXGI_OUTDUPL_POINTER_SHAPE_INFO shapeInfo_;
     LARGE_INTEGER timestamp_;
 };

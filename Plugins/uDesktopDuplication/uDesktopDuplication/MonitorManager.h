@@ -21,6 +21,7 @@ public:
     void SetCursorMonitorId(int id) { cursorMonitorId_ = id; }
     int GetCursorMonitorId() const { return cursorMonitorId_; }
     std::shared_ptr<Monitor> GetMonitor(int id) const;
+    std::shared_ptr<Cursor> GetCursor() const;
 
 private:
     void Initialize();
@@ -40,8 +41,9 @@ public:
 
 private:
     int timeout_ = 10;
+    bool enableTextureCopyFromGpuToCpu_ = false;
     std::vector<std::shared_ptr<Monitor>> monitors_;
-    std::shared_ptr<Cursor> cursor_;
+    std::shared_ptr<Cursor> cursor_ = std::make_shared<Cursor>();
     int cursorMonitorId_ = -1;
     bool isReinitializationRequired_ = false;
 };

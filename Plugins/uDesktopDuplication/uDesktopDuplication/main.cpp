@@ -21,11 +21,17 @@
 IUnityInterfaces* g_unity = nullptr;
 std::unique_ptr<MonitorManager> g_manager;
 std::queue<Message> g_messages;
+ID3D11DeviceContext* g_deviceContextForMainThread = nullptr;
 
 
 extern "C"
 {
-    UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API InitializeUDD()
+    UNITY_INTERFACE_EXPORT bool UNITY_INTERFACE_API IsInitialized()
+    {
+        return g_unity && g_manager;
+    }
+
+    UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API Initialize()
     {
         if (g_unity && !g_manager)
         {
@@ -34,10 +40,9 @@ extern "C"
         }
     }
 
-    UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API FinalizeUDD()
+    UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API Finalize()
     {
         if (!g_manager) return;
-
         g_manager.reset();
 
         std::queue<Message> empty;
@@ -52,12 +57,12 @@ extern "C"
         {
             case kUnityGfxDeviceEventInitialize:
             {
-                InitializeUDD();
+                Initialize();
                 break;
             }
             case kUnityGfxDeviceEventShutdown:
             {
-                FinalizeUDD();
+                Finalize();
                 break;
             }
         }
@@ -66,8 +71,6 @@ extern "C"
     UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API UnityPluginLoad(IUnityInterfaces* unityInterfaces)
     {
         g_unity = unityInterfaces;
-        InitializeUDD();
-
         auto unityGraphics = g_unity->Get<IUnityGraphics>();
         unityGraphics->RegisterDeviceEventCallback(OnGraphicsDeviceEvent);
     }
@@ -76,8 +79,6 @@ extern "C"
     {
         auto unityGraphics = g_unity->Get<IUnityGraphics>();
         unityGraphics->UnregisterDeviceEventCallback(OnGraphicsDeviceEvent);
-
-        FinalizeUDD();
         g_unity = nullptr;
     }
 
@@ -295,83 +296,52 @@ extern "C"
         return -1;
     }
 
-    UNITY_INTERFACE_EXPORT bool UNITY_INTERFACE_API IsCursorVisible(int id)
+    UNITY_INTERFACE_EXPORT bool UNITY_INTERFACE_API IsCursorVisible()
     {
         if (!g_manager) return false;
-        if (auto monitor = g_manager->GetMonitor(id))
-        {
-            return monitor->GetCursor()->IsVisible();
-        }
-        return false;
+        return g_manager->GetCursor()->IsVisible();
     }
 
-    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorX(int id)
+    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorX()
     {
         if (!g_manager) return -1;
-        if (auto monitor = g_manager->GetMonitor(id))
-        {
-            return monitor->GetCursor()->GetX();
-        }
-        return -1;
+        return g_manager->GetCursor()->GetX();
     }
 
-    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorY(int id)
+    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorY()
     {
         if (!g_manager) return -1;
-        if (auto monitor = g_manager->GetMonitor(id))
-        {
-            return monitor->GetCursor()->GetY();
-        }
-        return -1;
+        return g_manager->GetCursor()->GetY();
     }
 
-    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorShapeWidth(int id)
+    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorShapeWidth()
     {
         if (!g_manager) return -1;
-        if (auto monitor = g_manager->GetMonitor(id))
-        {
-            return monitor->GetCursor()->GetWidth();
-        }
-        return -1;
+        return g_manager->GetCursor()->GetWidth();
     }
 
-    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorShapeHeight(int id)
+    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorShapeHeight()
     {
         if (!g_manager) return -1;
-        if (auto monitor = g_manager->GetMonitor(id))
-        {
-            return monitor->GetCursor()->GetHeight();
-        }
-        return -1;
+        return g_manager->GetCursor()->GetHeight();
     }
 
-    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorShapePitch(int id)
+    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorShapePitch()
     {
         if (!g_manager) return -1;
-        if (auto monitor = g_manager->GetMonitor(id))
-        {
-            return monitor->GetCursor()->GetPitch();
-        }
-        return -1;
+        return g_manager->GetCursor()->GetPitch();
     }
 
-    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorShapeType(int id)
+    UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetCursorShapeType()
     {
         if (!g_manager) return -1;
-        if (auto monitor = g_manager->GetMonitor(id))
-        {
-            return monitor->GetCursor()->GetType();
-        }
-        return -1;
+        return g_manager->GetCursor()->GetType();
     }
 
-    UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API GetCursorTexture(int id, ID3D11Texture2D* texture)
+    UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API GetCursorTexture(ID3D11Texture2D* texture)
     {
         if (!g_manager) return;
-        if (auto monitor = g_manager->GetMonitor(id))
-        {
-            monitor->GetCursorTexture(texture);
-        }
+        return g_manager->GetCursor()->GetTexture(texture);
     }
 
     UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API SetTexturePtr(int id, void* texture)
@@ -391,6 +361,7 @@ extern "C"
         {
             return monitor->GetMoveRectCount();
         }
+        return 0;
     }
 
     UNITY_INTERFACE_EXPORT void* UNITY_INTERFACE_API GetMoveRects(int id)
@@ -400,6 +371,7 @@ extern "C"
         {
             return monitor->GetMoveRects();
         }
+        return nullptr;
     }
 
     UNITY_INTERFACE_EXPORT int UNITY_INTERFACE_API GetDirtyRectCount(int id)
@@ -409,6 +381,7 @@ extern "C"
         {
             return monitor->GetDirtyRectCount();
         }
+        return 0;
     }
 
     UNITY_INTERFACE_EXPORT void* UNITY_INTERFACE_API GetDirtyRects(int id)
@@ -417,6 +390,36 @@ extern "C"
         if (auto monitor = g_manager->GetMonitor(id))
         {
             return monitor->GetDirtyRects();
+        }
+        return nullptr;
+    }
+
+    UNITY_INTERFACE_EXPORT bool UNITY_INTERFACE_API GetPixels(int id, BYTE* output, int x, int y, int width, int height)
+    {
+        if (!g_manager) return nullptr;
+        if (auto monitor = g_manager->GetMonitor(id))
+        {
+            return monitor->GetPixels(output, x, y, width, height);
+        }
+        return false;
+    }
+
+    UNITY_INTERFACE_EXPORT bool UNITY_INTERFACE_API HasBeenUpdated(int id)
+    {
+        if (!g_manager) return nullptr;
+        if (auto monitor = g_manager->GetMonitor(id))
+        {
+            return monitor->HasBeenUpdated();
+        }
+        return false;
+    }
+
+    UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API UseGetPixels(int id, bool use)
+    {
+        if (!g_manager) return;
+        if (auto monitor = g_manager->GetMonitor(id))
+        {
+            return monitor->UseGetPixels(use);
         }
     }
 }

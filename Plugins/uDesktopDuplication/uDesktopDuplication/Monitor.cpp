@@ -10,7 +10,6 @@ using namespace Microsoft::WRL;
 
 Monitor::Monitor(int id)
     : id_(id)
-    , cursor_(std::make_unique<Cursor>(this))
 {
 }
 
@@ -58,10 +57,17 @@ void Monitor::Initialize(IDXGIOutput* output)
         case S_OK:
         {
             state_ = State::Available;
+            const auto rot = static_cast<DXGI_MODE_ROTATION>(GetRotation());
             Debug::Log("Monitor::Initialize() => OK.");
             Debug::Log("    ID    : ", GetId());
             Debug::Log("    Size  : (", GetWidth(), ", ", GetHeight(), ")");
             Debug::Log("    DPI   : (", GetDpiX(), ", ", GetDpiY(), ")");
+            Debug::Log("    Rot   : ", 
+                rot == DXGI_MODE_ROTATION_IDENTITY  ? "Landscape" :
+                rot == DXGI_MODE_ROTATION_ROTATE90  ? "Portrait" :
+                rot == DXGI_MODE_ROTATION_ROTATE180 ? "Landscape (flipped)" :
+                rot == DXGI_MODE_ROTATION_ROTATE270 ? "Portrait (flipped)" : 
+                "Unspecified");
             break;
         }
         case E_INVALIDARG:
@@ -113,10 +119,11 @@ void Monitor::Render(UINT timeout)
 {
     if (!deskDupl_) return;
 
+    HRESULT hr;
     ComPtr<IDXGIResource> resource;
     DXGI_OUTDUPL_FRAME_INFO frameInfo;
 
-    auto hr = deskDupl_->AcquireNextFrame(timeout, &frameInfo, &resource);
+    hr = deskDupl_->AcquireNextFrame(timeout, &frameInfo, &resource);
     if (FAILED(hr))
     {
         switch (hr)
@@ -155,16 +162,16 @@ void Monitor::Render(UINT timeout)
         return;
     }
 
+    ID3D11Texture2D* texture;
+    if (FAILED(resource.CopyTo(&texture)))
+    {
+        Debug::Error("Monitor::Render() => resource.As() failed.");
+        return;
+    }
+
     // Get texture
     if (unityTexture_)
     {
-        ID3D11Texture2D* texture;
-        if (FAILED(resource.CopyTo(&texture)))
-        {
-            Debug::Error("Monitor::Render() => resource.As() failed.");
-            return;
-        }
-
         D3D11_TEXTURE2D_DESC srcDesc, dstDesc;
         texture->GetDesc(&srcDesc);
         unityTexture_->GetDesc(&dstDesc);
@@ -189,22 +196,36 @@ void Monitor::Render(UINT timeout)
     }
 
     UpdateMetadata(frameInfo);
-    UpdateCursor(frameInfo);
 
-	hr = deskDupl_->ReleaseFrame();
+    if (frameInfo.PointerPosition.Visible)
+    {
+        GetMonitorManager()->SetCursorMonitorId(id_);
+    }
+
+    if (GetMonitorManager()->GetCursorMonitorId() == id_)
+    {
+        UpdateCursor(frameInfo);
+    }
+
+    if (UseGetPixels())
+    {
+        CopyTextureFromGpuToCpu(texture);
+    }
+
+    hr = deskDupl_->ReleaseFrame();
     if (FAILED(hr))
     {
-		switch (hr)
-		{
+        switch (hr)
+        {
             case DXGI_ERROR_ACCESS_LOST:
-			{
-				Debug::Log("Monitor::Render() => ReleaseFrame() => DXGI_ERROR_ACCESS_LOST.");
-				state_ = State::AccessLost;
-				break;
-			}
+            {
+                Debug::Log("Monitor::Render() => DXGI_ERROR_ACCESS_LOST.");
+                state_ = State::AccessLost;
+                break;
+            }
             case DXGI_ERROR_INVALID_CALL:
             {
-                Debug::Error("Monitor::Render() => ReleaseFrame() => DXGI_ERROR_INVALID_CALL.");
+                Debug::Error("Monitor::Render() => DXGI_ERROR_INVALID_CALL.");
                 break;
             }
             default:
@@ -213,15 +234,19 @@ void Monitor::Render(UINT timeout)
                 Debug::Error("Monitor::Render() => Unknown Error.");
                 break;
             }
-		}
+        }
+        return;
     }
+
+    hasBeenUpdated_ = true;
 }
 
 
 void Monitor::UpdateCursor(const DXGI_OUTDUPL_FRAME_INFO& frameInfo)
 {
-    cursor_->UpdateBuffer(frameInfo);
-    cursor_->UpdateTexture();
+    auto cursor_ = GetMonitorManager()->GetCursor();
+    cursor_->UpdateBuffer(this, frameInfo);
+    cursor_->Draw(this);
 }
 
 
@@ -351,18 +376,6 @@ IDXGIOutputDuplication* Monitor::GetDeskDupl()
 }
 
 
-const std::unique_ptr<Cursor>& Monitor::GetCursor() 
-{ 
-    return cursor_; 
-}
-
-
-void Monitor::GetCursorTexture(ID3D11Texture2D* texture)
-{
-    cursor_->GetTexture(texture);
-}
-
-
 void Monitor::GetName(char* buf, int len) const
 {
     strcpy_s(buf, len, monitorInfo_.szDevice);
@@ -372,6 +385,12 @@ void Monitor::GetName(char* buf, int len) const
 bool Monitor::IsPrimary() const
 {
     return monitorInfo_.dwFlags == MONITORINFOF_PRIMARY;
+}
+
+
+bool Monitor::HasBeenUpdated() const
+{
+    return hasBeenUpdated_;
 }
 
 
@@ -450,4 +469,204 @@ int Monitor::GetDirtyRectCount() const
 RECT* Monitor::GetDirtyRects() const
 {
     return metaData_.As<RECT>(moveRectSize_);
+}
+
+
+void Monitor::UseGetPixels(bool use)
+{
+    useGetPixels_ = use;
+}
+
+
+bool Monitor::UseGetPixels() const
+{
+    return useGetPixels_;
+}
+
+
+void Monitor::CopyTextureFromGpuToCpu(ID3D11Texture2D* texture)
+{
+    const auto monitorRot = static_cast<DXGI_MODE_ROTATION>(GetRotation());
+    const auto monitorWidth = GetWidth();
+    const auto monitorHeight = GetHeight();
+    const auto isVertical = 
+        monitorRot == DXGI_MODE_ROTATION_ROTATE90 || 
+        monitorRot == DXGI_MODE_ROTATION_ROTATE270;
+    const auto desktopImageWidth  = !isVertical ? monitorWidth  : monitorHeight;
+    const auto desktopImageHeight = !isVertical ? monitorHeight : monitorWidth;
+
+    if (!textureForGetPixels_)
+    {
+        D3D11_TEXTURE2D_DESC desc;
+        desc.Width              = desktopImageWidth;
+        desc.Height             = desktopImageHeight;
+        desc.MipLevels          = 1;
+        desc.ArraySize          = 1;
+        desc.Format             = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.SampleDesc.Count   = 1;
+        desc.SampleDesc.Quality = 0;
+        desc.Usage              = D3D11_USAGE_STAGING;
+        desc.BindFlags          = 0;
+        desc.CPUAccessFlags     = D3D11_CPU_ACCESS_READ;
+        desc.MiscFlags          = 0;
+
+        if (FAILED(GetDevice()->CreateTexture2D(&desc, nullptr, &textureForGetPixels_)))
+        {
+            Debug::Error("Monitor::CopyTextureFromGpuToCpu() => GetDevice()->CreateTexture2D() failed.");
+            return;
+        }
+    }
+
+    {
+        ComPtr<ID3D11DeviceContext> context;
+        GetDevice()->GetImmediateContext(&context);
+        context->CopyResource(textureForGetPixels_.Get(), texture);
+    }
+
+    ComPtr<IDXGISurface> surface;
+    if (FAILED(textureForGetPixels_.As(&surface)))
+    {
+        Debug::Error("Monitor::CopyTextureFromGpuToCpu() => texture.As() failed.");
+        return;
+    }
+
+    DXGI_MAPPED_RECT mappedSurface;
+    if (FAILED(surface->Map(&mappedSurface, DXGI_MAP_READ)))
+    {
+        Debug::Error("Monitor::CopyTextureFromGpuToCpu() => surface->Map() failed.");
+        return;
+    }
+
+    const UINT size = desktopImageWidth * desktopImageHeight * sizeof(UINT);
+    bufferForGetPixels_.ExpandIfNeeded(size);
+    std::memcpy(bufferForGetPixels_.Get(), mappedSurface.pBits, size);
+
+    if (FAILED(surface->Unmap()))
+    {
+        Debug::Error("Monitor::CopyTextureFromGpuToCpu() => surface->Unmap() failed.");
+        return;
+    }
+}
+
+
+bool Monitor::GetPixels(BYTE* output, int x, int y, int width, int height)
+{
+    if (!UseGetPixels())
+    {
+        Debug::Error("Monitor::GetPixels() => UseGetPixels(true) must have been called when you want to use GetPixels().");
+        return false;
+    }
+
+    if (!bufferForGetPixels_)
+    {
+        Debug::Error("Monitor::GetPixels() => CopyTextureFromGpuToCpu() has not been called yet.");
+        return false;
+    }
+
+    const auto monitorRot = static_cast<DXGI_MODE_ROTATION>(GetRotation());
+    const auto monitorWidth = GetWidth();
+    const auto monitorHeight = GetHeight();
+    const auto isVertical = 
+        monitorRot == DXGI_MODE_ROTATION_ROTATE90 || 
+        monitorRot == DXGI_MODE_ROTATION_ROTATE270;
+    const auto desktopImageWidth  = !isVertical ? monitorWidth  : monitorHeight;
+    const auto desktopImageHeight = !isVertical ? monitorHeight : monitorWidth;
+
+    // check area in destop coorinates.
+    int left, top, right, bottom;
+
+    switch (monitorRot)
+    {
+        case DXGI_MODE_ROTATION_ROTATE90:
+        {
+            left   = y;
+            top    = monitorWidth - x - width;
+            right  = y + width;
+            bottom = monitorWidth - x;
+            break;
+        }
+        case DXGI_MODE_ROTATION_ROTATE180:
+        {
+            left   = monitorWidth - x - width;
+            top    = monitorHeight - y - height;
+            right  = monitorWidth - x;
+            bottom = monitorHeight - y;
+            break;
+        }
+        case DXGI_MODE_ROTATION_ROTATE270:
+        {
+            left   = monitorHeight - y - height;
+            top    = x;
+            right  = monitorHeight - y;
+            bottom = x + width;
+            break;
+        }
+        case DXGI_MODE_ROTATION_IDENTITY:
+        case DXGI_MODE_ROTATION_UNSPECIFIED:
+        default:
+        {
+            left   = x;
+            top    = y;
+            right  = x + width;
+            bottom = y + height;
+            break;
+        }
+    }
+
+    if (left   <  0 || 
+        top    <  0 || 
+        right  >= desktopImageWidth || 
+        bottom >= desktopImageHeight)
+    {
+        Debug::Error("Monitor::GetPixels() => is out of area.");
+        Debug::Error(
+            "    ",
+            "(", left, ", ", top, ")", 
+            " ~ (", right, ", ", bottom, ") > ",
+            "(", desktopImageWidth, ", ", desktopImageHeight, ")");
+        return false;
+    }
+
+    for (int row = 0; row < height; ++row)
+    {
+        for (int col = 0; col < width; ++col)
+        {
+            int inRow, inCol;
+            switch (monitorRot)
+            {
+                case DXGI_MODE_ROTATION_ROTATE90:
+                    inCol = left + row;
+                    inRow = bottom - 1 - col;
+                    break;
+                case DXGI_MODE_ROTATION_ROTATE180:
+                    inCol = right - 1 - col;
+                    inRow = bottom - 1 - row;
+                    break;
+                case DXGI_MODE_ROTATION_ROTATE270:
+                    inCol = right - 1 - row;
+                    inRow = top + col;
+                    break;
+                case DXGI_MODE_ROTATION_IDENTITY:
+                case DXGI_MODE_ROTATION_UNSPECIFIED:
+                default:
+                    inCol = left + col;
+                    inRow = top + row;
+                    break;
+            }
+            const auto inIndex = 4 * (inRow * desktopImageWidth + inCol);
+
+            const auto outRow = height - 1 - row;
+            const auto outCol = col;
+            const auto outIndex = 4 * (outRow * width + outCol);
+
+
+            // BGRA -> RGBA
+            output[outIndex + 0] = bufferForGetPixels_[inIndex + 2];
+            output[outIndex + 1] = bufferForGetPixels_[inIndex + 1];
+            output[outIndex + 2] = bufferForGetPixels_[inIndex + 0];
+            output[outIndex + 3] = bufferForGetPixels_[inIndex + 3];
+        }
+    }
+
+    return true;
 }

@@ -40,7 +40,6 @@ public class Monitor
 
     ~Monitor()
     {
-        DestroyTexture();
     }
 
     public int id 
@@ -146,12 +145,22 @@ public class Monitor
 
     public bool isHorizontal
     { 
-        get { return width > height; }
+        get 
+        {
+            return 
+                (rotation == MonitorRotation.Identity) || 
+                (rotation == MonitorRotation.Rotate180);
+        }
     }
 
     public bool isVertical 
     { 
-        get { return height > width; }
+        get 
+        {
+            return 
+                (rotation == MonitorRotation.Rotate90) || 
+                (rotation == MonitorRotation.Rotate270);
+        }
     }
 
     public bool isCursorVisible
@@ -161,12 +170,12 @@ public class Monitor
 
     public int cursorX
     { 
-        get { return Lib.GetCursorX(id); }
+        get { return Lib.GetCursorMonitorId() == id ? Lib.GetCursorX() : -1; }
     }
 
     public int cursorY
     { 
-        get { return Lib.GetCursorY(id); }
+        get { return Lib.GetCursorMonitorId() == id ? Lib.GetCursorY() : -1; }
     }
 
     public int systemCursorX
@@ -189,17 +198,17 @@ public class Monitor
 
     public int cursorShapeWidth
     { 
-        get { return Lib.GetCursorShapeWidth(id); }
+        get { return Lib.GetCursorShapeWidth(); }
     }
 
     public int cursorShapeHeight
     { 
-        get { return Lib.GetCursorShapeHeight(id); }
+        get { return Lib.GetCursorShapeHeight(); }
     }
 
     public CursorShapeType cursorShapeType
     { 
-        get { return Lib.GetCursorShapeType(id); }
+        get { return Lib.GetCursorShapeType(); }
     }
 
     public int moveRectCount
@@ -220,6 +229,25 @@ public class Monitor
     public RECT[] dirtyRects
     {
         get { return Lib.GetDirtyRects(id); }
+    }
+
+    public bool hasBeenUpdated
+    {
+        get { return Lib.HasBeenUpdated(id); }
+    }
+
+    bool useGetPixels_ = false;
+    public bool useGetPixels
+    {
+        get
+        {
+            return useGetPixels_;
+        }
+        set
+        {
+            useGetPixels_ = value;
+            Lib.UseGetPixels(id, value);
+        }
     }
 
     public bool shouldBeUpdated
@@ -306,6 +334,33 @@ public class Monitor
     public void Reinitialize()
     {
         CreateTextureIfNeeded();
+    }
+
+    public Color32[] GetPixels(int x, int y, int width, int height)
+    {
+        if (!useGetPixels_) {
+            Debug.LogErrorFormat("Please set Monitor[{0}].useGetPixels as true.", id);
+            return null;
+        }
+        return Lib.GetPixels(id, x, y, width, height);
+    }
+
+    public bool GetPixels(Color32[] colors, int x, int y, int width, int height)
+    {
+        if (!useGetPixels_) {
+            Debug.LogErrorFormat("Please set Monitor[{0}].useGetPixels as true.", id);
+            return false;
+        }
+        return Lib.GetPixels(id, colors, x, y, width, height);
+    }
+
+    public Color32 GetPixel(int x, int y)
+    {
+        if (!useGetPixels_) {
+            Debug.LogErrorFormat("Please set Monitor[{0}].useGetPixels as true.", id);
+            return Color.black;
+        }
+        return Lib.GetPixel(id, x, y);
     }
 }
 
